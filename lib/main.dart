@@ -1,8 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:app_blocker/app_blocker.dart';
 
-void main() async {
-  WidgetsFlutterBinding.ensureInitialized();
+void main() {
   runApp(const MullaStudyLockApp());
 }
 
@@ -18,277 +17,186 @@ class MullaStudyLockApp extends StatelessWidget {
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.teal),
         useMaterial3: true,
       ),
-      home: const MainDashboard(),
+      home: const MainScreen(),
     );
   }
 }
 
-class MainDashboard extends StatefulWidget {
-  const MainDashboard({super.key});
+class MainScreen extends StatefulWidget {
+  const MainScreen({super.key});
 
   @override
-  State<MainDashboard> createState() => _MainDashboardState();
+  State<MainScreen> createState() => _MainScreenState();
 }
 
-class _MainDashboardState extends State<MainDashboard> {
+class _MainScreenState extends State<MainScreen> {
   final AppBlocker _blocker = AppBlocker.instance;
+  
   bool _hasPermission = false;
-  List<BlockSchedule> _schedules = [];
+  bool _isLoading = true;
+  List<AppInfo> _installedApps = [];
+  Set<String> _selectedPackages = {};
 
   @override
   void initState() {
     super.initState();
-    _loadData();
+    _initializeApp();
   }
 
-  Future<void> _loadData() async {
+  // دالة التهيئة: طلب الصلاحيات وجلب التطبيقات
+  Future<void> _initializeApp() async {
+    setState(() => _isLoading = true);
+    
+    // 1. طلب الصلاحيات
     await _blocker.requestPermission();
-    final status = await _blocker.hasPermission();
-    final schedules = await _blocker.getSchedules();
-    setState(() {
-      _hasPermission = status;
-      _schedules = schedules;
-    });
+    _hasPermission = await _blocker.hasPermission();
+
+    // 2. جلب التطبيقات إذا كانت الصلاحية ممنوحة
+    if (_hasPermission) {
+      final apps = await _blocker.getApps();
+      // ترتيب التطبيقات أبجدياً
+      apps.sort((a, b) => a.appName.toLowerCase().compareTo(b.appName.toLowerCase()));
+      _installedApps = apps;
+    }
+
+    setState(() => _isLoading = false);
+  }
+
+  // دالة بدء الجدول التجريبي (يبدأ الآن ولمدة 5 دقائق)
+  Future<void> _startTestSchedule() async {
+    if (_selectedPackages.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('الرجاء اختيار تطبيق واحد على الأقل')),
+      );
+      return;
+    }
+
+    final now = DateTime.now();
+    final endTime = now.add(const Duration(minutes: 5));
+
+    // إنشاء الجدول
+    final schedule = BlockSchedule(
+      id: 'test_schedule_${now.millisecondsSinceEpoch}',
+      name: 'جدول تجريبي',
+      appIdentifiers: _selectedPackages.toList(),
+      weekdays: [now.weekday], // اليوم الحالي
+      startTime: TimeOfDay(hour: now.hour, minute: now.minute),
+      endTime: TimeOfDay(hour: endTime.hour, minute: endTime.minute),
+    );
+
+    await _blocker.addSchedule(schedule);
+    await _blocker.enableSchedule(schedule.id);
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('تم تفعيل القفل لمدة 5 دقائق! جرب فتح التطبيقات التي اخترتها.'),
+          backgroundColor: Colors.green,
+        ),
+      );
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('قفل الدراسة المجدول'),
+        title: const Text('قفل التطبيقات المجدول'),
         actions: [
           IconButton(
             icon: const Icon(Icons.refresh),
-            onPressed: _loadData,
+            onPressed: _initializeApp,
+            tooltip: 'تحديث الصلاحيات والتطبيقات',
           )
         ],
       ),
-      body: !_hasPermission
-          ? _buildPermissionView()
-          : _buildSchedulesView(),
-      floatingActionButton: _hasPermission
-          ? FloatingActionButton.extended(
-              onPressed: () async {
-                await Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (context) => const AddScheduleScreen()),
-                );
-                _loadData(); // تحديث القائمة بعد العودة
-              },
-              icon: const Icon(Icons.add),
-              label: const Text('إضافة جدول'),
-            )
-          : null,
+      body: _buildBody(),
     );
   }
 
-  Widget _buildPermissionView() {
-    return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          const Icon(Icons.warning_amber_rounded, size: 80, color: Colors.red),
-          const SizedBox(height: 20),
-          const Text(
-            'الرجاء تفعيل صلاحية إمكانية الوصول\nلكي يعمل التطبيق بشكل صحيح',
-            textAlign: TextAlign.center,
-            style: TextStyle(fontSize: 18),
-          ),
-          const SizedBox(height: 20),
-          ElevatedButton(
-            onPressed: _loadData,
-            child: const Text('منح الصلاحية'),
-          ),
-        ],
-      ),
-    );
-  }
+  Widget _buildBody() {
+    if (_isLoading) {
+      return const Center(child: CircularProgressIndicator());
+    }
 
-  Widget _buildSchedulesView() {
-    if (_schedules.isEmpty) {
-      return const Center(
+    if (!_hasPermission) {
+      return Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(Icons.calendar_today, size: 80, color: Colors.grey),
-            SizedBox(height: 20),
-            Text('لا توجد جداول مضافة بعد.', style: TextStyle(fontSize: 18, color: Colors.grey)),
+            const Icon(Icons.warning, size: 80, color: Colors.orange),
+            const SizedBox(height: 20),
+            const Text(
+              'يجب تفعيل صلاحية إمكانية الوصول (Accessibility)\nلكي يعمل التطبيق.',
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 16),
+            ),
+            const SizedBox(height: 20),
+            ElevatedButton(
+              onPressed: _initializeApp,
+              child: const Text('طلب الصلاحية الآن'),
+            ),
           ],
         ),
       );
     }
 
-    return ListView.builder(
-      padding: const EdgeInsets.all(16),
-      itemCount: _schedules.length,
-      itemBuilder: (context, index) {
-        final schedule = _schedules[index];
-        return Card(
-          elevation: 4,
-          margin: const EdgeInsets.only(bottom: 12),
-          child: ListTile(
-            leading: const Icon(Icons.lock_clock, color: Colors.teal),
-            title: Text(schedule.name),
-            subtitle: Text('${schedule.startTime.format(context)} - ${schedule.endTime.format(context)}'),
-            trailing: Switch(
-              value: true, // يمكنك ربطها بحالة التفعيل الفعلية لاحقاً
-              onChanged: (val) async {
-                if (val) {
-                  await _blocker.enableSchedule(schedule.id);
-                } else {
-                  await _blocker.disableSchedule(schedule.id);
-                }
-                _loadData();
-              },
-            ),
+    // عرض قائمة التطبيقات
+    return Column(
+      children: [
+        Container(
+          padding: const EdgeInsets.all(16),
+          color: Colors.teal.withOpacity(0.1),
+          child: const Text(
+            'اختر التطبيقات التي تريد قفلها أثناء فترة الدراسة:',
+            style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
           ),
-        );
-      },
-    );
-  }
-}
+        ),
+        Expanded(
+          child: ListView.builder(
+            itemCount: _installedApps.length,
+            itemBuilder: (context, index) {
+              final app = _installedApps[index];
+              final isSelected = _selectedPackages.contains(app.packageName);
 
-// ==========================================
-// شاشة إضافة جدول جديد
-// ==========================================
-class AddScheduleScreen extends StatefulWidget {
-  const AddScheduleScreen({super.key});
-
-  @override
-  State<AddScheduleScreen> createState() => _AddScheduleScreenState();
-}
-
-class _AddScheduleScreenState extends State<AddScheduleScreen> {
-  final _nameController = TextEditingController(text: 'ساعات المدرسة');
-  
-  // ترميز الأيام (ISO): الاثنين=1 ... الأحد=7
-  final List<int> _selectedDays = [7, 1, 2, 3, 4]; // الأحد إلى الخميس افتراضياً
-  
-  TimeOfDay _startTime = const TimeOfDay(hour: 8, minute: 0);
-  TimeOfDay _endTime = const TimeOfDay(hour: 14, minute: 0);
-
-  // تطبيقات تجريبية للحظر (لاحقاً سنقرأها من الهاتف)
-  final List<String> _blockedApps = [
-    'com.whatsapp',
-    'com.instagram.android',
-    'com.facebook.katana',
-  ];
-
-  final Map<int, String> _daysMap = {
-    1: 'الإثنين',
-    2: 'الثلاثاء',
-    3: 'الأربعاء',
-    4: 'الخميس',
-    5: 'الجمعة',
-    6: 'السبت',
-    7: 'الأحد',
-  };
-
-  Future<void> _pickTime(bool isStart) async {
-    final time = await showTimePicker(
-      context: context,
-      initialTime: isStart ? _startTime : _endTime,
-    );
-    if (time != null) {
-      setState(() {
-        if (isStart) _startTime = time;
-        else _endTime = time;
-      });
-    }
-  }
-
-  Future<void> _saveSchedule() async {
-    if (_nameController.text.isEmpty || _selectedDays.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('الرجاء إدخال اسم الجدول واختيار يوم واحد على الأقل')),
-      );
-      return;
-    }
-
-    final schedule = BlockSchedule(
-      id: DateTime.now().millisecondsSinceEpoch.toString(),
-      name: _nameController.text,
-      appIdentifiers: _blockedApps,
-      weekdays: _selectedDays,
-      startTime: _startTime,
-      endTime: _endTime,
-    );
-
-    await AppBlocker.instance.addSchedule(schedule);
-    await AppBlocker.instance.enableSchedule(schedule.id);
-
-    if (mounted) Navigator.pop(context);
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('جدول جديد')),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
-        children: [
-          TextField(
-            controller: _nameController,
-            decoration: const InputDecoration(
-              labelText: 'اسم الجدول',
-              border: OutlineInputBorder(),
-            ),
-          ),
-          const SizedBox(height: 20),
-          
-          const Text('أيام الحظر:', style: TextStyle(fontWeight: FontWeight.bold)),
-          const SizedBox(height: 8),
-          Wrap(
-            spacing: 8,
-            children: _daysMap.entries.map((entry) {
-              final isSelected = _selectedDays.contains(entry.key);
-              return FilterChip(
-                label: Text(entry.value),
-                selected: isSelected,
-                onSelected: (selected) {
+              return CheckboxListTile(
+                title: Text(app.appName),
+                subtitle: Text(app.packageName, style: const TextStyle(fontSize: 12)),
+                secondary: app.icon != null 
+                    ? Image.memory(app.icon!, width: 40, height: 40) 
+                    : const Icon(Icons.android, size: 40),
+                value: isSelected,
+                onChanged: (bool? value) {
                   setState(() {
-                    if (selected) {
-                      _selectedDays.add(entry.key);
+                    if (value == true) {
+                      _selectedPackages.add(app.packageName);
                     } else {
-                      _selectedDays.remove(entry.key);
+                      _selectedPackages.remove(app.packageName);
                     }
                   });
                 },
               );
-            }).toList(),
+            },
           ),
-          
-          const SizedBox(height: 20),
-          Row(
-            children: [
-              Expanded(
-                child: OutlinedButton.icon(
-                  onPressed: () => _pickTime(true),
-                  icon: const Icon(Icons.access_time),
-                  label: Text('من: ${_startTime.format(context)}'),
-                ),
+        ),
+        // زر بدء التجربة
+        Padding(
+          padding: const EdgeInsets.all(16.0),
+          child: SizedBox(
+            width: double.infinity,
+            height: 50,
+            child: ElevatedButton.icon(
+              onPressed: _startTestSchedule,
+              icon: const Icon(Icons.lock_clock),
+              label: const Text('تجربة القفل الآن (لمدة 5 دقائق)', style: TextStyle(fontSize: 16)),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.teal,
+                foregroundColor: Colors.white,
               ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: OutlinedButton.icon(
-                  onPressed: () => _pickTime(false),
-                  icon: const Icon(Icons.access_time),
-                  label: Text('إلى: ${_endTime.format(context)}'),
-                ),
-              ),
-            ],
-          ),
-
-          const SizedBox(height: 30),
-          ElevatedButton(
-            onPressed: _saveSchedule,
-            style: ElevatedButton.styleFrom(
-              padding: const EdgeInsets.symmetric(vertical: 16),
             ),
-            child: const Text('حفظ وتفعيل الجدول', style: TextStyle(fontSize: 18)),
-          )
-        ],
-      ),
+          ),
+        ),
+      ],
     );
   }
 }
